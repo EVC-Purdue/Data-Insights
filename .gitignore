@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Frontend build artifacts and local configuration
+node_modules/
+dist/
+.env.local
+.env.*.local
+.DS_Store
+.vite/
