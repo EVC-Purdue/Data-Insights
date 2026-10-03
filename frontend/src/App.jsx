@@ -5,8 +5,8 @@ import Sidebar from './components/Sidebar.jsx'
 import { mockRuns } from './data/mockData.js'
 
 export default function App() {
-  const [runs, setRuns] = useState(mockRuns)
-  const [selectedId, setSelectedId] = useState(mockRuns[0].id)
+  const [runs, setRuns] = useState(usesMockData ? mockRuns : [])
+  const [selectedId, setSelectedId] = useState(usesMockData ? mockRuns[0].id : null)
   const [apiError, setApiError] = useState('')
 
   useEffect(() => {
@@ -16,5 +16,5 @@ export default function App() {
     }).catch((error) => setApiError(error.message))
   }, [])
 
-  return <div className="app-shell"><Sidebar usesMockData={usesMockData || Boolean(apiError)} /><main className="main-area"><Dashboard runs={runs} selectedId={selectedId} onRunChange={setSelectedId} apiError={apiError} usesMockData={usesMockData || Boolean(apiError)} /></main></div>
+  return <div className="app-shell"><Sidebar usesMockData={usesMockData || Boolean(apiError)} /><main className="main-area">{apiError ? <p className="api-message">Could not load telemetry: {apiError}</p> : <Dashboard runs={runs} selectedId={selectedId} onRunChange={setSelectedId} apiError={apiError} usesMockData={usesMockData || Boolean(apiError)} />}</main></div>
 }

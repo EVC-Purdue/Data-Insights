@@ -8,6 +8,7 @@ function ChartTooltip({ active, payload, label, unit }) {
 }
 
 export default function TelemetryChart({ title, subtitle, data, unit, domain, lines, zero = false, className = '' }) {
+  if (!data?.length) return <section className={`panel chart-panel ${className}`}><div className="panel-title"><div><h3>{title}</h3><p>{subtitle}</p></div></div><p className="api-message">Unavailable for this run.</p></section>
   const maxTime = data?.at(-1)?.time ?? 60
   const interval = Math.max(1, Math.ceil(maxTime / 4 / 5) * 5)
   const ticks = Array.from({ length: 5 }, (_, i) => Math.min(maxTime, i * interval))
@@ -15,7 +16,7 @@ export default function TelemetryChart({ title, subtitle, data, unit, domain, li
     <div className="panel-title"><div><h3>{title}</h3><p>{subtitle}</p></div></div>
     <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 12, right: 12, bottom: 0, left: -14 }}>
       <CartesianGrid vertical={false} stroke="#29332d" strokeDasharray="3 5" />
-      <XAxis dataKey="time" ticks={ticks} tickFormatter={formatTime} tickLine={false} axisLine={false} tick={{ fill: '#849087', fontSize: 10, fontFamily: 'DM Mono' }} dy={8} />
+      <XAxis type="number" domain={[0, maxTime]} dataKey="time" ticks={ticks} tickFormatter={formatTime} tickLine={false} axisLine={false} tick={{ fill: '#849087', fontSize: 10, fontFamily: 'DM Mono' }} dy={8} />
       <YAxis domain={domain} tickLine={false} axisLine={false} tick={{ fill: '#849087', fontSize: 10, fontFamily: 'DM Mono' }} tickFormatter={(value) => `${value}`} width={38} />
       {zero && <ReferenceLine y={0} stroke="#47544a" />}
       <Tooltip content={<ChartTooltip unit={unit} />} cursor={{ stroke: '#59675c', strokeDasharray: '4 4' }} />
