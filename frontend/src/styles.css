@@ -87,6 +87,14 @@
 .sim-track-svg [data-kart-marker]{cursor:grab}
 .sim-track-svg.is-dragging-kart [data-kart-marker]{cursor:grabbing}
 .sim-track-svg:hover{filter:brightness(1.12)}
+.sim-dot.centerline-dot{background:#d1d9e3}
+.sim-dot.route-dot{background:#f1b85b}
+.sim-kart-view{min-width:0;padding:9px 10px 7px;border:1px solid #303b4c;border-radius:7px;background:#192230;overflow:hidden}
+.sim-kart-view>header{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#e1e8f1;font-size:10px}
+.sim-kart-view>header span{color:#aab6c5;font:8px var(--sim-mono);white-space:nowrap}
+.sim-kart-view>svg{display:block;width:min(100%,340px);height:auto;aspect-ratio:1;margin:6px auto 0;border-radius:4px;background-color:#151c28;background-image:linear-gradient(#344155 1px,transparent 1px),linear-gradient(90deg,#344155 1px,transparent 1px);background-size:22px 22px}
+.sim-kart-view>small{display:block;margin-top:5px;color:#94a4b8;font-size:8px}
+.sim-kart-view-empty{width:min(100%,340px);aspect-ratio:1;margin:6px auto 0;display:grid;place-items:center;color:#94a4b8;font-size:9px}
 .sim-heading-card,.sim-point-data{min-width:0;background:#1a2230;border:1px solid #354154;border-radius:5px}
 .sim-heading-card{display:flex;align-items:center;gap:10px;padding:7px 10px}
 .sim-heading-compass{width:58px;height:58px;flex:none}
@@ -195,6 +203,30 @@
 .sim-zoom-controls button{min-width:23px;width:23px;height:21px;padding:0}
 .sim-zoom-controls>span{min-width:29px;color:#b8c4d2;text-align:center;font:8px var(--sim-mono)}
 .sim-track-toolbar>span{margin-left:auto;margin-right:7px}
+.sim-cost-panel{grid-column:1/-1;min-width:0;padding:12px 14px;background:#192230;border:1px solid #303b4c;border-radius:7px}
+.sim-cost-heading{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:8px}
+.sim-cost-heading>div{display:flex;flex-direction:column;gap:4px}
+.sim-cost-heading strong,.sim-cost-terms-title strong{color:#e6edf5;font-size:11px;font-weight:600}
+.sim-cost-heading span,.sim-cost-terms-title span{color:#9ba9ba;font-size:9px}
+.sim-cost-heading>b{color:#f3c76b;font:600 18px 'DM Mono',monospace;text-align:right;white-space:nowrap}
+.sim-cost-heading>b small{display:block;margin-top:3px;color:#aab6c5;font:9px 'DM Sans',sans-serif}
+.sim-cost-layout{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(350px,1fr);gap:16px;align-items:stretch}
+.sim-cost-plot{height:252px;min-width:0}
+.sim-cost-terms{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 12px;align-content:start;padding:5px 0}
+.sim-cost-terms-title{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;padding-bottom:4px;border-bottom:1px solid #303b4c}
+.sim-cost-term{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px;align-items:center;min-width:0}
+.sim-cost-term>span{overflow:hidden;color:#b7c3d1;font-size:9px;text-overflow:ellipsis;white-space:nowrap}
+.sim-cost-term>b{color:#e5edf6;font:10px 'DM Mono',monospace;text-align:right}
+.sim-cost-bar{position:relative;grid-column:1/-1;height:4px;overflow:hidden;border-radius:3px;background:linear-gradient(90deg,transparent 49.7%,#78879a 49.7%,#78879a 50.3%,transparent 50.3%),#263346}
+.sim-cost-bar i{position:absolute;top:0;height:100%;background:#6fb6dc}
+.sim-cost-bar i.negative{background:#ee9f74}
+.sim-cost-empty{padding:25px 4px;color:#aab6c5;font-size:10px}
+.sim-fit-view .sim-cost-panel{padding:8px 10px}
+.sim-fit-view .sim-cost-plot{height:175px}
+.sim-fit-view .sim-cost-terms{gap:4px 8px}
+.sim-fit-view .sim-cost-term>span{font-size:8px}
+.sim-fit-view .sim-cost-term>b{font-size:9px}
+@media(max-width:950px){.sim-cost-layout{grid-template-columns:1fr}.sim-cost-plot{height:200px}.sim-cost-terms{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){.sim-chart-controls{font-size:7px}.sim-track-toolbar>span{display:none}}
 /* Keep Fit screen compact even when the regular dashboard uses larger charts. */
 .sim-fit-view .sim-signal-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px}

@@ -103,3 +103,9 @@ For a **real AI smoke test**, distinct from unit tests:
 7. Remove backend AI configuration and restart. **Analyze Run** should show **AI analysis not configured** while import and deterministic diagnostics remain usable.
 
 The implementation session had no configured backend AI credentials/model, so no real OpenAI end-to-end result is claimed. Automated SDK/API mocks are only contract/failure-path checks. Live Jetson hardware was not available; existing health/telemetry behavior was checked with a synthetic live snapshot.
+
+
+
+TODO:
+1. Cost Function Mapping
+2. Change Arrow to match kart and be realistic

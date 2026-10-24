@@ -25,6 +25,15 @@ connection = {'configured': False, 'connected': False, 'error': None, 'lastRespo
 cache = EpisodeCache(ROOT / 'recordings' / 'simulator')
 analysis_slot = threading.BoundedSemaphore(1)
 
+# Indexes are defined by AutonomousKart's MPCPlanner._publish_status payload.
+# Keep the labels alongside the indexes so we never infer fields from values.
+MPC_COST_FIELDS = (
+    ('lateral_offset', 19), ('heading', 20), ('speed', 21), ('steering', 22),
+    ('steering_rate', 23), ('acceleration', 24), ('boundary', 25), ('progress', 26),
+    ('terminal_lateral_offset', 27), ('terminal_heading', 28),
+    ('lateral_acceleration', 29), ('edge', 30),
+)
+
 
 @app.after_request
 def local_cors(response):
@@ -54,7 +63,8 @@ def new_run(key, name, source):
             'controller': {'health': 'Unavailable', 'mode': None, 'frequency': None,
                            'trackingError': None, 'messages': None},
             'telemetry': {'speed': [], 'throttle': [], 'steering': [], 'gps': [],
-                          'acceleration': [], 'heading': [], 'commanded': []},
+                          'acceleration': [], 'heading': [], 'commanded': [],
+                          'mpcCost': [], 'mpcCostBreakdown': []},
             'speedLabel': 'Wheel speed', 'status': 'Recorded'}
 
 
@@ -63,6 +73,7 @@ def import_bag(path):
     run = new_run(key, path.parent.name, 'recording')
     start = None
     status_times = []
+    last_cost_sample = -math.inf
     topics = ['/e_comms/kart_speed_m_per_s', '/e_comms/throttle_pwm', '/e_comms/steering_pwm', '/gps']
     # Use a common bag log-time origin, retaining individual message timestamps.
     for event in read_ros2_messages(str(path)):
@@ -75,6 +86,21 @@ def import_bag(path):
         topic = event.channel.topic
         if topic == '/mpc/status':
             status_times.append(t)
+            data = event.ros_msg.data
+            # Cost total and its twelve terms are part of the 63+ float
+            # /mpc/status payload (indexes 10 and 19..30 respectively).
+            # Sample at 10 Hz to keep large bags light while retaining a useful
+            # synchronized cost trace for the viewer.
+            if len(data) >= 31 and t - last_cost_sample >= 0.1:
+                total = float(data[10])
+                costs = [float(data[index]) for _, index in MPC_COST_FIELDS]
+                if math.isfinite(total) and total >= 0 and all(math.isfinite(v) for v in costs):
+                    run['telemetry']['mpcCost'].append({'time': t, 'value': total})
+                    run['telemetry']['mpcCostBreakdown'].append({
+                        'time': t,
+                        **{name: value for (name, _), value in zip(MPC_COST_FIELDS, costs)},
+                    })
+                    last_cost_sample = t
         if topic == '/imu':
             msg = event.ros_msg
             value = float(msg.linear_acceleration.x)
@@ -121,6 +147,7 @@ def import_bag(path):
                 ratio = (point['time'] - speed[left]['time']) / span if span > 0 else 0.0
                 point['position'] = positions[left] + (positions[right] - positions[left]) * ratio
     run['controller']['messages'] = len(status_times)
+    run['controller']['costSamples'] = len(run['telemetry']['mpcCost'])
     if len(status_times) > 1 and max(status_times) > min(status_times):
         run['controller']['frequency'] = (len(status_times) - 1) / (max(status_times) - min(status_times))
     return run
