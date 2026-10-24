@@ -1,5 +1,6 @@
 """Laptop-only, read-only telemetry viewer. No ROS installation required."""
 import argparse
+from copy import deepcopy
 from bisect import bisect_right
 import json
 import math
@@ -12,12 +13,17 @@ from urllib.request import build_opener, ProxyHandler
 
 from flask import Flask, jsonify, send_from_directory, request
 from mcap_ros2.reader import read_ros2_messages
+import agent
+from diagnostics import Diagnostics
+from simulator import EpisodeCache, SimulatorError, episode_rows, import_episode, job_detail, jobs, number
 
 ROOT = Path(__file__).resolve().parents[1]
 app = Flask(__name__, static_folder=str(ROOT / 'frontend' / 'dist'))
 lock = threading.Lock()
 runs = {}
 connection = {'configured': False, 'connected': False, 'error': None, 'lastResponse': None, 'lastAdvance': None}
+cache = EpisodeCache(ROOT / 'recordings' / 'simulator')
+analysis_slot = threading.BoundedSemaphore(1)
 
 
 @app.after_request
@@ -26,7 +32,8 @@ def local_cors(response):
         'http://localhost:5173', 'http://127.0.0.1:5173',
     }:
         response.headers['Access-Control-Allow-Origin'] = request.headers['Origin']
-        response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
         response.vary.add('Origin')
     return response
 
@@ -116,16 +123,20 @@ def import_bag(path):
 def summarize(run):
     series = run['telemetry']['speed']
     distance = sum((abs(a['value']) + abs(b['value'])) / 2 * (b['time'] - a['time'])
-                   for a, b in zip(series, series[1:])) if len(series) > 1 else None
-    return {**{k: v for k, v in run.items() if k != 'telemetry'},
+                   for a, b in zip(series, series[1:])) if len(series) > 1 and all(number(p['value']) for p in series) else None
+    return {**{k: v for k, v in run.items() if k not in ('telemetry', 'diagnostic')},
+            **({'timeBasis': run['diagnostic']['metadata']['time']} if 'diagnostic' in run else {}),
             'distance': distance,
             'currentSpeed': series[-1]['value'] if series else None,
-            'maxSpeed': max((p['value'] for p in series), default=None)}
+            'maxSpeed': max((p['value'] for p in series if number(p['value'])), default=None)}
 
 
 def thin(series, limit=1800):
     # Keep bucket extrema for scalar signals so short spikes survive display reduction.
     if len(series) <= limit:
+        return series
+    if any('value' in p and not number(p['value']) for p in series):
+        # Preserve null gaps rather than accidentally drawing through missing data.
         return series
     step = math.ceil(len(series) / (limit // 2))
     out = [series[0]]
@@ -163,6 +174,79 @@ def telemetry(key):
         if run is None:
             return jsonify(error='Run not found'), 404
         return jsonify(clean({**summarize(run), 'telemetry': {k: thin(v) for k, v in run['telemetry'].items()}}))
+
+
+@app.get('/api/simulator/jobs')
+def simulator_jobs():
+    try:
+        return jsonify(jobs())
+    except SimulatorError as exc:
+        return jsonify(error=str(exc)), 502
+
+
+@app.get('/api/simulator/jobs/<job_id>/episodes')
+def simulator_episodes(job_id):
+    try:
+        detail = job_detail(job_id)
+        return jsonify(job=detail['job'], episodes=episode_rows(detail))
+    except SimulatorError as exc:
+        return jsonify(error=str(exc)), 502
+
+
+@app.before_request
+def protect_local_actions():
+    if request.path.startswith('/api/') and request.method == 'POST':
+        origin = request.headers.get('Origin')
+        if origin and origin not in {'http://localhost:5173', 'http://127.0.0.1:5173', request.host_url.rstrip('/')}:
+            return jsonify(error='Untrusted request origin'), 403
+        if request.content_length and request.content_length > 4096:
+            return jsonify(error='Request too large'), 413
+
+
+@app.post('/api/simulator/import')
+def simulator_import():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or set(body) != {'jobId', 'episodeId'}:
+        return jsonify(error='Expected jobId and episodeId'), 400
+    try:
+        run = import_episode(body['jobId'], body['episodeId'], cache)
+        with lock:
+            runs[run['id']] = run
+        return jsonify(clean(summarize(run)))
+    except SimulatorError as exc:
+        return jsonify(error=str(exc)), 502
+    except OSError:
+        return jsonify(error='Could not save the episode cache; import was not accepted'), 500
+
+
+def snapshot(key):
+    with lock:
+        return deepcopy(runs.get(key))
+
+
+@app.get('/api/runs/<key>/diagnostics')
+def run_diagnostics(key):
+    run = snapshot(key)
+    if run is None:
+        return jsonify(error='Run not found'), 404
+    return jsonify(clean({**Diagnostics(run).report(), 'aiConfigured': agent.configured()}))
+
+
+@app.post('/api/runs/<key>/analyze')
+def analyze_run(key):
+    run = snapshot(key)
+    if run is None:
+        return jsonify(error='Run not found'), 404
+    if not agent.configured():
+        return jsonify(error='AI analysis not configured'), 503
+    if not analysis_slot.acquire(blocking=False):
+        return jsonify(error='An AI analysis is already running; try again when it finishes'), 429
+    try:
+        return jsonify(agent.analyze(run))
+    except agent.AnalysisError as exc:
+        return jsonify(error=str(exc)), 502
+    finally:
+        analysis_slot.release()
 
 
 @app.get('/')
@@ -240,6 +324,10 @@ def main():
     parser.add_argument('--jetson-url', help='Existing master API, e.g. http://127.0.0.1:8000 through SSH')
     parser.add_argument('--port', type=int, default=5000)
     args = parser.parse_args()
+    cached, cache_errors = cache.load()
+    runs.update({r['id']: r for r in cached})
+    for error in cache_errors:
+        print(error, flush=True)
     for path in sorted(args.data_dir.rglob('*.mcap')):
         try:
             run = import_bag(path)

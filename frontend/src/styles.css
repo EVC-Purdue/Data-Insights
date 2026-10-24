@@ -4,3 +4,19 @@
 @media(max-width:520px){.sidebar{padding:8px 10px}.brand{font-size:11px}.brand-mark{width:25px;height:25px}.side-link{width:30px;justify-content:center;padding:0}.page-content{width:calc(100% - 24px);padding-top:20px}.page-header{align-items:flex-start;gap:12px}.page-header h1{font-size:23px}.page-subtitle{max-width:275px;font-size:9px;line-height:1.45}.connection-pill{font-size:0;padding:9px}.connection-pill i{margin:0}.run-bar{min-height:58px;padding:8px}.run-selector{min-width:0;flex:1}.run-selector-text strong{max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px}.select-chevron{left:auto;right:3px}.run-data-note{font-size:0}.run-data-note small{display:none}.run-data-note .data-pulse{margin-right:2px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.stat-card{min-height:93px;padding:9px}.stat-label{font-size:8px}.stat-icon{width:22px;height:22px}.stat-icon svg{width:14px}.stat-value{font-size:20px}.stat-detail{font-size:7px}.signals-section{margin-top:18px}.charts-grid{grid-template-columns:1fr;gap:8px}.chart-panel,.chart-panel.wide-chart{grid-column:auto;height:207px;padding:10px}.chart-wrap,.wide-chart .chart-wrap{height:143px}.bottom-grid{margin-top:8px}.controller-metrics{gap:5px}.controller-panel{padding:10px}.data-footnote{font-size:6px}}
 
 .chart-axis-select select{max-width:96px;padding:4px 18px 4px 6px;border:1px solid #364138;border-radius:4px;background:#1d251f;color:#aab5ac;font-size:8px;cursor:pointer}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.diagnostics-area { margin: 24px 32px 0; display: grid; gap: 16px; }
+.diagnostics-panel { padding: 20px; overflow: hidden; }
+.diagnostics-panel p { color: #aeb9b1; font-size: 13px; line-height: 1.6; margin: 10px 0; }
+.diagnostics-panel h4 { margin: 16px 0 8px; }
+.diagnostic-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-top: 12px; }
+.diagnostic-controls label { display: grid; gap: 6px; font-size: 12px; min-width: 0; max-width: 100%; }
+.diagnostic-controls button, .diagnostic-controls select { background: #202a23; color: #e8f1eb; border: 1px solid #455348; border-radius: 6px; padding: 8px; max-width: 100%; }
+.diagnostic-controls select { max-width: 420px; }
+.diagnostic-controls button:disabled { opacity: .5; cursor: wait; }
+.diagnostics-panel details { padding: 8px 0; font-size: 13px; }
+.diagnostics-panel summary { cursor: pointer; overflow-wrap: anywhere; }
+.diagnostics-panel pre { max-height: 340px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.diagnostics-panel small { display: block; }
+.diagnostic-table { overflow-x: auto; }
+.diagnostic-table td, .diagnostic-table th { padding: 6px 14px 6px 0; text-align: left; font-size: 12px; }
+@media (max-width: 600px) { .diagnostics-area { margin: 16px; } .diagnostic-controls select { max-width: 260px; } }

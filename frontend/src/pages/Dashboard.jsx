@@ -15,6 +15,7 @@ export default function Dashboard({ runs, selectedId, onRunChange, apiError, use
   const [loading, setLoading] = useState(false)
   const [liveState, setLiveState] = useState(null)
   const isLive = selectedRun?.source === 'live'
+  const isSim = selectedRun?.source === 'simulator'
 
   useEffect(() => {
     let current = true
@@ -72,19 +73,22 @@ export default function Dashboard({ runs, selectedId, onRunChange, apiError, use
     <section className="stats-grid" aria-label="Run summary statistics">
       <StatCard label="Current speed" value={stats.currentSpeed?.toFixed(1) ?? 'Unavailable'} unit="m/s" detail="Latest recorded sample" icon={Gauge} tone="green" />
       <StatCard label="Max speed" value={stats.maxSpeed?.toFixed(1) ?? 'Unavailable'} unit="m/s" detail="Peak in this run" icon={Zap} tone="blue" />
-      <StatCard label="Distance" value={stats.distance?.toLocaleString(undefined, { maximumFractionDigits: 1 }) ?? 'Unavailable'} unit="m" detail="Integrated absolute wheel speed" icon={Route} tone="purple" />
+      <StatCard label="Distance" value={stats.distance?.toLocaleString(undefined, { maximumFractionDigits: 1 }) ?? 'Unavailable'} unit="m" detail={isSim ? 'Integrated simulation forward speed' : isLive ? 'Integrated estimated forward speed' : 'Integrated absolute wheel speed'} icon={Route} tone="purple" />
       <StatCard label="Run duration" value={timeLabel(stats.duration)} unit="" detail="Recorded telemetry window" icon={Timer} tone="amber" />
     </section>
     {apiError && <p className="api-message">Could not reach the configured API, showing the local mock run.</p>}
     <section className="signals-section" id="signals"><div className="section-heading"><div><h2>Telemetry signals</h2><p>Time-aligned vehicle data from the selected run</p></div><span className="sample-rate">{usesMockData ? 'MOCK DATA · 1 SEC SAMPLES' : 'REST API DATA'}</span></div>
+      {isSim && <p>Simulation ground truth, not sensor measurements. Time: {stats.timeBasis?.basis}; negative times precede handoff when known. PWM and sensor X-axis acceleration are unavailable.</p>}
       <div className="charts-grid">
-        <TelemetryChart title="Speed" subtitle="Kart speed · /e_comms/kart_speed_m_per_s" data={telemetry.speed} distance={stats.distance} showAxisSelector unit=" m/s" domain={[0, 'auto']} lines={[{ key: 'value', name: 'Speed', color: '#a5ed68' }]} className="wide-chart" />
+        <TelemetryChart title="Speed" subtitle={isSim ? 'Simulation ground-truth forward speed' : stats.speedLabel || 'Kart speed · /e_comms/kart_speed_m_per_s'} data={telemetry.speed} distance={stats.distance} showAxisSelector={!isSim} unit=" m/s" domain={isSim ? ['auto', 'auto'] : [0, 'auto']} lines={[{ key: 'value', name: 'Speed', color: '#a5ed68' }]} className="wide-chart" />
         <TelemetryChart title="Throttle" subtitle="Throttle command · /e_comms/throttle_pwm" data={telemetry.throttle} distance={stats.distance} showAxisSelector unit={usesMockData ? '%' : ' raw PWM'} domain={['auto', 'auto']} lines={[{ key: 'value', name: 'Throttle', color: '#72b9fa' }]} />
         <TelemetryChart title="Steering" subtitle="Steering input · /e_comms/steering_pwm" data={telemetry.steering} distance={stats.distance} showAxisSelector unit={usesMockData ? '%' : ' raw PWM'} domain={['auto', 'auto']} zero lines={[{ key: 'value', name: 'Steering', color: '#c9a1ff' }]} />
         <TelemetryChart title="IMU / acceleration" subtitle="Sensor X-axis acceleration · /imu" data={telemetry.acceleration} distance={stats.distance} showAxisSelector unit=" m/s²" domain={['auto', 'auto']} zero lines={[{ key: 'value', name: 'Acceleration', color: '#ffc46b' }]} />
+        {isSim && <TelemetryChart title="Steering angle" subtitle="Simulation ground truth · average wheel angle" data={telemetry.steeringAngle} unit=" deg" domain={['auto', 'auto']} lines={[{ key: 'value', name: 'Wheel angle', color: '#c9a1ff' }]} />}
+        {isSim && <TelemetryChart title="Lateral acceleration" subtitle="Simulation truth · upstream median-filtered body lateral acceleration" data={telemetry.lateralAcceleration} unit=" m/s²" domain={['auto', 'auto']} lines={[{ key: 'value', name: 'Lateral acceleration', color: '#ffc46b' }]} />}
       </div>
     </section>
-    <div className="bottom-grid"><GpsMap points={telemetry.gps} usesMockData={usesMockData} /><ControllerPanel controller={stats.controller} data={telemetry.commanded} measuredData={telemetry.speed} /></div>
+    <div className="bottom-grid"><GpsMap points={isSim ? telemetry.simPosition : telemetry.gps} usesMockData={usesMockData} isSimulation={isSim} /><ControllerPanel controller={stats.controller} data={telemetry.commanded} measuredData={telemetry.speed} isSimulation={isSim} /></div>
     <footer className="data-footnote"><span>{usesMockData ? 'LOCAL MOCK DATA' : 'REST API DATA'}</span><span>{usesMockData ? 'Set VITE_API_URL to connect your JSON endpoints.' : 'Data loaded through the API adapter.'}</span></footer>
   </div>
 }

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 
-const formatTime = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
+const formatTime = (seconds) => `${seconds < 0 ? '-' : ''}${Math.floor(Math.abs(seconds) / 60)}:${String(Math.floor(Math.abs(seconds) % 60)).padStart(2, '0')}`
 
 function ChartTooltip({ active, payload, label, unit, xAxis }) {
   if (!active || !payload?.length) return null
@@ -17,13 +17,14 @@ export default function TelemetryChart({ title, subtitle, data, unit, domain, li
     position: Number(point.position ?? point.distance ?? (maxTime ? (point.time / maxTime) * (distance || maxPosition) : 0)),
   })), [data, distance, maxPosition, maxTime])
   const xMax = xAxis === 'time' ? maxTime : (maxPosition || distance)
-  const ticks = Array.from({ length: 5 }, (_, i) => xMax * i / 4)
+  const xMin = xAxis === 'time' ? Math.min(0, data?.[0]?.time ?? 0) : 0
+  const ticks = Array.from({ length: 5 }, (_, i) => xMin + (xMax - xMin) * i / 4)
   const chartTitle = showAxisSelector ? `${title} vs. ${xAxis === 'time' ? 'time' : 'position'}` : title
   return <section className={`panel chart-panel ${className}`}>
     <div className="panel-title"><div><h3>{chartTitle}</h3><p>{subtitle}</p></div>{showAxisSelector && <label className="chart-axis-select"><span className="sr-only">Horizontal axis</span><select value={xAxis} onChange={(event) => setXAxis(event.target.value)} aria-label={`Horizontal axis for ${title}`}><option value="time">vs. time</option><option value="position">vs. position</option></select></label>}</div>
     <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><LineChart data={plottedData} margin={{ top: 12, right: 12, bottom: 0, left: -14 }}>
       <CartesianGrid vertical={false} stroke="#29332d" strokeDasharray="3 5" />
-      <XAxis dataKey={xAxis} type="number" domain={[0, xMax || 'auto']} ticks={ticks} tickFormatter={xAxis === 'time' ? formatTime : (value) => `${Math.round(value)}`} tickLine={false} axisLine={false} tick={{ fill: '#849087', fontSize: 10, fontFamily: 'DM Mono' }} dy={8} />
+      <XAxis dataKey={xAxis} type="number" domain={[xMin, xMax || 'auto']} ticks={ticks} tickFormatter={xAxis === 'time' ? formatTime : (value) => `${Math.round(value)}`} tickLine={false} axisLine={false} tick={{ fill: '#849087', fontSize: 10, fontFamily: 'DM Mono' }} dy={8} />
       <YAxis domain={domain} tickLine={false} axisLine={false} tick={{ fill: '#849087', fontSize: 10, fontFamily: 'DM Mono' }} tickFormatter={(value) => `${value}`} width={38} />
       {zero && <ReferenceLine y={0} stroke="#47544a" />}
       <Tooltip content={<ChartTooltip unit={unit} xAxis={xAxis} />} cursor={{ stroke: '#59675c', strokeDasharray: '4 4' }} />

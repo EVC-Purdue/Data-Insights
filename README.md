@@ -43,3 +43,9 @@ npm run dev
 - `frontend/src/data/mockData.js` generated mock sessions and telemetry
 
 The API exposes `GET /api/runs` and `GET /api/runs/:id/telemetry`. When `VITE_API_URL` is unset, the dashboard uses sample data. When it is set, connection failures are displayed instead of falling back to samples.
+
+## Simulator import and run diagnostics
+
+The connected dashboard can import completed simulator episodes, reopen locally cached episodes offline, calculate deterministic diagnostics, and run an explicit **Analyze Run** investigation using the OpenAI Responses API. AI requires backend-only `OPENAI_API_KEY` and `OPENAI_MODEL`; imports and deterministic diagnostics work without them.
+
+See [setup, data semantics, API limits, verification and the real AI smoke test](docs/simulator-diagnostics.md). No simulator job mutation or vehicle-control tools are provided.
