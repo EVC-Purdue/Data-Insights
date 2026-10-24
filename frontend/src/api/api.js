@@ -31,4 +31,5 @@ export const importSimulatorEpisode = (jobId, episodeId, signal) => getJson('/si
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId, episodeId }),
 })
 export const getDiagnostics = (runId, signal) => getJson(`/runs/${encodeURIComponent(runId)}/diagnostics`, signal)
+export const getRunMeasurements = (runId, signal) => getJson(`/runs/${encodeURIComponent(runId)}/measurements`, signal)
 export const analyzeRun = (runId, signal) => getJson(`/runs/${encodeURIComponent(runId)}/analyze`, signal, { method: 'POST' })

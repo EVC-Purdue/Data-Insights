@@ -19,11 +19,13 @@ In another terminal:
 ```powershell
 cd frontend
 npm install
-# frontend/.env.local should contain VITE_API_URL=http://127.0.0.1:5000/api
+# frontend/.env.local should contain VITE_API_URL=http://127.0.0.1:5001/api
 npm run dev
 ```
 
 Without `VITE_API_URL`, existing mock mode remains available; simulator/AI controls are hidden. With the backend connected, choose **Load simulator jobs**, a completed job and episode, then **Import episode**. Cached runs load at backend startup from `recordings/simulator/` and can be selected offline without contacting the simulator. The cache contains original episode JSON and normalized runs, including provenance/configuration. It is ignored by Git. Corrupt entries are skipped with a startup message. Reimport refreshes that episode atomically.
+
+The connected dashboard opens the real kart recordings view by default. Select a local MCAP bag and use its **Run diagnostics** panel to calculate deterministic evidence or explicitly request **Analyze Run** for an AI review of that selected recording. Simulator runs remain available at `?source=simulator`; the same analysis endpoint supports selected simulator and live runs. AI does not run automatically when changing recordings.
 
 The Flask process must have `OPENAI_API_KEY` and `OPENAI_MODEL` in its environment for AI. Use a model available to your project that supports Responses function calling and structured JSON output. Neither variable belongs in React or a `VITE_` variable. This app does not auto-load backend `.env` files; supply the environment before starting Flask. Do not paste credentials into source, Git, diagnostic notes, or logs. With either variable absent, imports and deterministic diagnostics work and AI returns **AI analysis not configured**.
 

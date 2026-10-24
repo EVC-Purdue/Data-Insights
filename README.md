@@ -9,7 +9,7 @@ python -m pip install -r backend/requirements.txt
 python backend/app.py
 ```
 
-`frontend/.env.local` is configured with `VITE_API_URL=http://127.0.0.1:5000/api`. The Vite app calls the Flask endpoints at `/api/runs` and `/api/runs/:id/telemetry`; the Flask process reads the checked-in MCAP recordings at startup. Restart Vite after changing the API URL. CORS permits `http://127.0.0.1:5173` and `http://localhost:5173`.
+`frontend/.env.local` is configured with `VITE_API_URL=http://127.0.0.1:5001/api`. The Vite app calls the Flask endpoints at `/api/runs` and `/api/runs/:id/telemetry`; the Flask process reads MCAP recordings under `src/data` at startup. Restart Vite after changing the API URL. CORS permits `http://127.0.0.1:5173` and `http://localhost:5173`.
 
 To include a live Jetson session, first make the Jetson's existing read-only `/odom` HTTP endpoint reachable from this computer. If it listens on port 8000 on the Jetson, open an SSH tunnel in another terminal:
 

@@ -225,3 +225,5 @@ dist/
 .DS_Store
 .vite/
 recordings/
+# Locally fetched vehicle MCAPs; the upstream Git LFS bags are too large to vendor here.
+src/data/*/

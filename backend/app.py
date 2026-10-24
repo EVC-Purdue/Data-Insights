@@ -54,7 +54,7 @@ def new_run(key, name, source):
             'controller': {'health': 'Unavailable', 'mode': None, 'frequency': None,
                            'trackingError': None, 'messages': None},
             'telemetry': {'speed': [], 'throttle': [], 'steering': [], 'gps': [],
-                          'acceleration': [], 'commanded': []},
+                          'acceleration': [], 'heading': [], 'commanded': []},
             'speedLabel': 'Wheel speed', 'status': 'Recorded'}
 
 
@@ -80,6 +80,12 @@ def import_bag(path):
             value = float(msg.linear_acceleration.x)
             if msg.linear_acceleration_covariance[0] != -1 and math.isfinite(value):
                 run['telemetry']['acceleration'].append({'time': t, 'value': value})
+        if topic == '/odom':
+            orientation = event.ros_msg.pose.pose.orientation
+            qx, qy, qz, qw = orientation.x, orientation.y, orientation.z, orientation.w
+            yaw = math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+            if math.isfinite(yaw):
+                run['telemetry']['heading'].append({'time': t, 'value': yaw})
         if topic not in topics:
             continue
         msg = event.ros_msg
@@ -126,6 +132,7 @@ def summarize(run):
                    for a, b in zip(series, series[1:])) if len(series) > 1 and all(number(p['value']) for p in series) else None
     return {**{k: v for k, v in run.items() if k not in ('telemetry', 'diagnostic')},
             **({'timeBasis': run['diagnostic']['metadata']['time']} if 'diagnostic' in run else {}),
+            'sampleCounts': {name: len(values) for name, values in run['telemetry'].items()},
             'distance': distance,
             'currentSpeed': series[-1]['value'] if series else None,
             'maxSpeed': max((p['value'] for p in series if number(p['value'])), default=None)}
@@ -188,7 +195,7 @@ def simulator_jobs():
 def simulator_episodes(job_id):
     try:
         detail = job_detail(job_id)
-        return jsonify(job=detail['job'], episodes=episode_rows(detail))
+        return jsonify(job=detail['job'], episodes=episode_rows(detail), breakdown=detail.get('breakdown', {}))
     except SimulatorError as exc:
         return jsonify(error=str(exc)), 502
 
@@ -230,6 +237,15 @@ def run_diagnostics(key):
     if run is None:
         return jsonify(error='Run not found'), 404
     return jsonify(clean({**Diagnostics(run).report(), 'aiConfigured': agent.configured()}))
+
+
+@app.get('/api/runs/<key>/measurements')
+def run_measurements(key):
+    run = snapshot(key)
+    if run is None:
+        return jsonify(error='Run not found'), 404
+    diagnostic = run.get('diagnostic') or Diagnostics(run).data
+    return jsonify(clean(diagnostic))
 
 
 @app.post('/api/runs/<key>/analyze')
@@ -322,7 +338,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data-dir', type=Path, default=ROOT / 'src/data')
     parser.add_argument('--jetson-url', help='Existing master API, e.g. http://127.0.0.1:8000 through SSH')
-    parser.add_argument('--port', type=int, default=5000)
+    parser.add_argument('--port', type=int, default=5001)
     args = parser.parse_args()
     cached, cache_errors = cache.load()
     runs.update({r['id']: r for r in cached})

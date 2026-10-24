@@ -67,7 +67,7 @@ export default function Dashboard({ runs, selectedId, onRunChange, apiError, use
   if (!selectedRun || !telemetry) return <div className="page-content"><p>{isLive ? liveStatus : 'No run telemetry is available.'}</p></div>
 
   return <div className="page-content">
-    <header className="page-header" id="overview"><div><div className="eyebrow"><Activity size={14} />AUTONOMOUS KART <span>/</span> TELEMETRY</div><h1>Run dashboard</h1><p className="page-subtitle">Understand vehicle performance, driver inputs, and controller behavior.</p></div><span className="connection-pill" role="status"><i />{isLive ? liveStatus : loading ? 'LOADING' : 'RUN COMPLETE'}</span></header>
+    <header className="page-header" id="overview"><div><div className="eyebrow"><Activity size={14} />AUTONOMOUS KART <span>/</span> TELEMETRY</div><h1>Run dashboard</h1><p className="page-subtitle">Understand vehicle performance, driver inputs, and controller behavior.</p><a className="sim-return-link" href="/">← Simulator job viewer</a></div><span className="connection-pill" role="status"><i />{isLive ? liveStatus : loading ? 'LOADING' : 'RUN COMPLETE'}</span></header>
     {oldMeasurements && <p className="api-message" role="status">{liveStatus} — displayed measurements are old; waiting for fresh telemetry.</p>}
     <div className="run-bar"><RunSelector runs={runs} selectedId={selectedRun.id} onChange={onRunChange} /><div className="run-data-note"><span className="data-pulse" />{usesMockData ? 'Sample telemetry' : 'Recorded telemetry'}<small>·</small>{stats.duration.toFixed(1)} sec</div></div>
     <section className="stats-grid" aria-label="Run summary statistics">

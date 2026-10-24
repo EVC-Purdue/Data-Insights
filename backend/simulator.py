@@ -1,4 +1,4 @@
-//"""Read-only adapter for AutonomousSimulator's public viewer API (no GPL code copied)."""
+"""Read-only adapter for AutonomousSimulator's public viewer API (no GPL code copied)."""
 import hashlib
 import json
 import math
