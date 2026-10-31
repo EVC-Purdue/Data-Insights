@@ -3,6 +3,7 @@ import hashlib
 import json
 import math
 from copy import deepcopy
+from statistics import median
 
 from simulator import SOURCE, number
 
@@ -23,10 +24,15 @@ def run_format(run):
         measurements['position_' + axis] = {'unit': 'm', 'kind': 'estimate', 'source': '/odom' if live else '/gps',
             'samples': [{'time': p['time'], 'value': p.get(axis)} for p in points]}
     times = [p['time'] for m in measurements.values() for p in m['samples']]
+    start = min(times) if times else None
+    end = max(times) if times else None
+    if not live and number(run.get('duration')):
+        start = min(0, start) if start is not None else 0
+        end = max(run['duration'], end) if end is not None else run['duration']
     return {'schemaVersion': 1, 'measurements': measurements,
             'metadata': {'source': run['source'], 'runId': run['id'], 'date': run.get('date'),
                 'time': {'unit': 's', 'basis': 'laptop_arrival_relative' if live else 'bag_log_relative',
-                         'start': min(times) if times else None, 'end': max(times) if times else None},
+                         'start': start, 'end': end},
                 'limitations': ['No reference truth: real-world localization error cannot be calculated.',
                                 'Live diagnostics use a snapshot of the retained five-minute window.' if live else
                                 'Signals are asynchronous; unavailable samples are not fabricated.']},
@@ -56,6 +62,49 @@ class Diagnostics:
                  'samples': len(m['samples']), 'missing': sum(not number(p.get('value')) for p in m['samples'])}
                 for name, m in self.data['measurements'].items()]
 
+    def coverage(self, signal):
+        if signal not in self.data['measurements']:
+            raise ValueError('Unknown signal')
+        m = self.data['measurements'][signal]
+        samples = m['samples']
+        times = sorted({p['time'] for p in samples if number(p.get('time'))})
+        valid_times = sorted({p['time'] for p in samples if number(p.get('time')) and number(p.get('value'))})
+        deltas = [b - a for a, b in zip(times, times[1:])]
+        cadence = median(deltas) if len(deltas) >= 3 else None
+        gaps = [{'start': a, 'end': b, 'duration': b - a} for a, b in zip(times, times[1:])
+                if cadence is not None and b - a > 3 * cadence + 1e-9]
+        bounds = self.data['metadata']['time']
+        start, end = bounds.get('start'), bounds.get('end')
+        def interval(a, b):
+            return {'start': a, 'end': b, 'duration': b - a} if number(a) and number(b) and b > a else None
+        first, last = (times[0], times[-1]) if times else (None, None)
+        # Do not assign an empty series two overlapping leading/trailing gaps.
+        return self.record({'type': 'signal_coverage', 'signal': signal, 'unit': m['unit'],
+            'kind': m['kind'], 'source': m['source'], 'timeBasis': bounds,
+            'state': 'empty' if not samples else 'no_finite_values' if not valid_times else 'sampled',
+            'samples': len(samples), 'nullValues': sum(p.get('value') is None for p in samples),
+            'invalidValues': sum(p.get('value') is not None and not number(p.get('value')) for p in samples),
+            'invalidTimestamps': sum(not number(p.get('time')) for p in samples),
+            'firstTimestamp': first, 'lastTimestamp': last,
+            'firstFiniteTimestamp': valid_times[0] if valid_times else None,
+            'lastFiniteTimestamp': valid_times[-1] if valid_times else None,
+            'leadingUncovered': interval(start, first), 'trailingUncovered': interval(last, end),
+            'entireRunUncovered': interval(start, end) if not times else None,
+            'cadenceSeconds': cadence, 'gapThresholdSeconds': 3 * cadence if cadence is not None else None,
+            'internalGapCount': len(gaps), 'internalGapSeconds': math.fsum(g['duration'] for g in gaps),
+            'internalGaps': sorted(gaps, key=lambda g: (-g['duration'], g['start']))[:3],
+            'gapsTruncated': len(gaps) > 3,
+            'method': 'Timestamp gaps > 3x median positive spacing (>=3 spacings), tolerance 1e-9 s; largest 3 shown. Nulls are values at present timestamps. Coverage gaps alone do not establish sensor failure.'})
+
+    def overview(self):
+        names = list(self.data['measurements'])
+        preferred = ['speed', 'acceleration', 'ay_mps2', 'steering', 'throttle', 'cmd_speed', 'commanded']
+        ordered = [n for n in preferred if n in names] + [n for n in names if n not in preferred]
+        metadata = self.metadata()
+        return {'metadata': {k: metadata[k] for k in ('source', 'time', 'limitations') if k in metadata},
+                'coverage': [self.coverage(n) for n in ordered[:12]], 'omittedSignals': ordered[12:],
+                'note': 'Coverage is timestamp availability, not a sensor-health verdict. Use signal_coverage for omitted signals and time_window_summary for measurements/commands.'}
+
     def summary(self, signal, start=None, end=None):
         if signal not in self.data['measurements']:
             raise ValueError('Unknown signal')
@@ -71,12 +120,37 @@ class Diagnostics:
         lo = min(valid, key=lambda p: p['value']) if valid else None
         hi = max(valid, key=lambda p: p['value']) if valid else None
         return self.record({'type': 'window_summary', 'signal': signal, 'unit': m['unit'], 'kind': m['kind'],
+            'requestedWindow': {'start': start, 'end': end},
             'source': m['source'], 'timeBasis': self.data['metadata']['time'],
             'start': samples[0]['time'] if samples else start, 'end': samples[-1]['time'] if samples else end,
             'count': len(valid), 'missing': len(samples) - len(valid), 'min': lo, 'max': hi,
             'mean': math.fsum(values) / len(values) if values else None,
+            'meanAbsolute': math.fsum(abs(v) for v in values) / len(values) if values else None,
+            'positiveCount': sum(v > 0 for v in values), 'negativeCount': sum(v < 0 for v in values),
+            'zeroCount': sum(v == 0 for v in values),
             'rms': math.hypot(*values) / math.sqrt(len(values)) if values else None,
-            'threshold': None, 'method': 'Sample-weighted finite values; no interpolation; no failure threshold.'})
+            'threshold': None, 'method': 'Sample-weighted finite values; no interpolation; no failure threshold. Signed mean can cancel during reversals; meanAbsolute and rms are magnitudes, not distance.'})
+
+    def significant_coverage(self):
+        """Deterministic finalization context, not another model-requested tool."""
+        bounds = self.data['metadata']['time']
+        duration = max(0, (bounds.get('end') or 0) - (bounds.get('start') or 0))
+        items = []
+        for name in self.data['measurements']:
+            c = self.coverage(name)
+            threshold = max(1.0, duration * 0.05, 3 * (c['cadenceSeconds'] or 0))
+            intervals = [dict(kind=kind, **c[kind]) for kind in ('leadingUncovered', 'trailingUncovered', 'entireRunUncovered')
+                         if c[kind] and c[kind]['duration'] >= threshold]
+            intervals += [dict(kind='internalGap', **gap) for gap in c['internalGaps'] if gap['duration'] >= threshold]
+            if intervals or c['nullValues'] or c['invalidValues'] or c['state'] in ('empty', 'no_finite_values'):
+                items.append({'type': 'coverage_limitation', 'signal': name, 'source': c['source'],
+                    'timeBasis': bounds, 'state': c['state'], 'nullValues': c['nullValues'],
+                    'invalidValues': c['invalidValues'], 'intervals': intervals,
+                    'significanceSeconds': threshold,
+                    'meaning': 'Imported signal availability only; source-topic inventory not checked. Not proof of sensor failure.'})
+        items.sort(key=lambda c: -max((i['duration'] for i in c['intervals']), default=0))
+        return {'limitations': [self.record(item) for item in items[:8]], 'omittedCount': max(0, len(items) - 8),
+                'rule': 'Uncovered interval >= max(1 s, 5% run duration, 3 cadence intervals); also empty/all-invalid signals and explicit invalid values. Largest 8 signal limitations shown.'}
 
     def events(self):
         found = []
@@ -146,14 +220,16 @@ class Diagnostics:
         if not isinstance(args, dict):
             raise ValueError('Tool arguments must be an object')
         expected = {'run_metadata': set(), 'available_signals': set(), 'detected_events': set(),
+                    'run_overview': set(), 'signal_coverage': {'signal'},
                     'time_window_summary': {'signal', 'start', 'end'}}
         if name not in expected or set(args) != expected[name]:
             raise ValueError('Unknown tool or invalid argument keys; tools are restricted to the selected run')
-        if name == 'time_window_summary':
+        if name in ('time_window_summary', 'signal_coverage'):
             if not isinstance(args['signal'], str):
                 raise ValueError('Signal must be a string')
-            return self.summary(**args)
-        return {'run_metadata': self.metadata, 'available_signals': self.signals, 'detected_events': self.events}[name]()
+            return self.coverage(**args) if name == 'signal_coverage' else self.summary(**args)
+        return {'run_metadata': self.metadata, 'available_signals': self.signals, 'detected_events': self.events,
+                'run_overview': self.overview}[name]()
 
     def report(self):
         events = self.events()

@@ -11,7 +11,7 @@ python -m venv .venv
 .venv/Scripts/python -m pip install -r backend/requirements.txt
 # Optional: defaults to https://evc.researchviewer.org
 $env:SIMULATOR_URL = 'https://evc.researchviewer.org'
-.venv/Scripts/python backend/app.py
+.venv\Scripts\python.exe backend\app.py --port 5000
 ```
 
 In another terminal:
@@ -19,15 +19,22 @@ In another terminal:
 ```powershell
 cd frontend
 npm install
-# frontend/.env.local should contain VITE_API_URL=http://127.0.0.1:5001/api
-npm run dev
+# frontend/.env.local should contain VITE_API_URL=http://127.0.0.1:5000/api
+$env:VITE_API_URL = 'http://127.0.0.1:5000/api'
+npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ```
 
 Without `VITE_API_URL`, existing mock mode remains available; simulator/AI controls are hidden. With the backend connected, choose **Load simulator jobs**, a completed job and episode, then **Import episode**. Cached runs load at backend startup from `recordings/simulator/` and can be selected offline without contacting the simulator. The cache contains original episode JSON and normalized runs, including provenance/configuration. It is ignored by Git. Corrupt entries are skipped with a startup message. Reimport refreshes that episode atomically.
 
 The connected dashboard opens the real kart recordings view by default. Select a local MCAP bag and use its **Run diagnostics** panel to calculate deterministic evidence or explicitly request **Analyze Run** for an AI review of that selected recording. Simulator runs remain available at `?source=simulator`; the same analysis endpoint supports selected simulator and live runs. AI does not run automatically when changing recordings.
 
-The Flask process must have `OPENAI_API_KEY` and `OPENAI_MODEL` in its environment for AI. Use a model available to your project that supports Responses function calling and structured JSON output. Neither variable belongs in React or a `VITE_` variable. This app does not auto-load backend `.env` files; supply the environment before starting Flask. Do not paste credentials into source, Git, diagnostic notes, or logs. With either variable absent, imports and deterministic diagnostics work and AI returns **AI analysis not configured**.
+The default AI provider is the hosted Gemini API. `AI_PROVIDER=gemini` is the only supported provider in this configuration; there is no fallback to Ollama or a paid provider. Configuration belongs in the Flask process environment, never frontend/VITE variables. The backend does not load `.env` files.
+
+- `GEMINI_API_KEY` is required by the backend and is never sent to React.
+- `GEMINI_MODEL` selects the model (default `gemini-3.5-flash-lite`). Choose a project/key with free-tier access and do not link a billing account if you want free-tier-only API use. A free-tier quota can still be exhausted; the app reports that and does not switch providers.
+- `GEMINI_REQUEST_TIMEOUT_SECONDS=180` controls an individual request (1 to 1,800 seconds); `AI_ANALYSIS_TIMEOUT_SECONDS=300` caps the entire analysis loop (1 to 3,600 seconds).
+
+The selected model is documented by Google as supporting function calling and structured outputs, with free-tier pricing listed for input and output. Free-tier limits can vary by project and change over time. See [Gemini 3.5 Flash-Lite](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite) and [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing).
 
 ## API additions
 
@@ -59,9 +66,9 @@ Independent event detection is intentionally small: autonomous viewer samples ex
 
 ## Agent bounds and report validation
 
-The official OpenAI Python SDK uses `AsyncOpenAI.responses.create`, strict function schemas and structured JSON reports. There are four tools: metadata, available signals, time-window summaries and detected events. Tools have no run selector, network, shell, vehicle control or simulator mutation capability. Dispatch validates exact argument keys, known signal names and finite ordered time bounds.
+The Gemini adapter uses Google's official `google-genai` Python SDK and the hosted Gemini API. The bounded loop disables SDK automatic function execution, lets the model choose among six read-only tools (overview, metadata, signals, coverage, events, and window summaries), validates arguments in Python, dispatches them only against the selected run and returns tool results to the model. A separate request uses Gemini's JSON-schema structured output for the final report; Pydantic and server-side evidence-reference validation gate the displayed report. Tools have no run selector, network, shell, vehicle control or simulator mutation capability. Dispatch validates exact argument keys, known signal names and finite ordered time bounds.
 
-Limits: six tool calls, at most seven Responses requests, 3,500 output tokens/request, 48,000 serialized history characters, 16,000 characters/tool output, 20-second SDK timeout with retries disabled, and 60 seconds for the whole cancellable loop. One AI request is allowed at a time per Flask process. Large tool outputs return a limit message; they are not silently treated as complete data. Reasoning items and encrypted reasoning content are preserved across stateless calls (`store=False`). Imported notes/log text are explicitly untrusted data, never instructions. The model chooses the tools; there is no canned “AI analysis.”
+Limits: six tool calls, bounded by a 48,000-character serialized context and 16,000 characters per tool result. Requests have configurable per-request and overall timeouts, with SDK retries disabled. One AI request is allowed at a time per Flask process. Large tool outputs return a limit message; they are not silently treated as complete data. Imported notes/log text are explicitly untrusted data, never instructions. The model chooses the tools; there is no canned AI analysis and no provider fallback.
 
 Pydantic validates report fields, finding classifications and evidence references. Returned findings must cite evidence actually delivered to the model; empty measurement windows cannot support findings. An upstream label cannot be classified as independent observation. Supporting evidence is attached server-side, not generated by the model. Hypotheses include evidence and uncertainty; insufficient data is a valid outcome. Schema/reference validation cannot prove a model's prose or causal inference is correct: the displayed evidence remains the review basis. API errors/refusals/incomplete or invalid outputs return an error, not a substitute report. SDK exception bodies are not returned or logged by the application.
 
@@ -76,36 +83,53 @@ Reviewed AutonomousSimulator revision `a9bfce0583e337b11f414e6057c1eab69182d34e`
 
 The upstream LICENSE is GPL-3.0; this repository is MIT. No upstream implementation was copied or bundled. The adapter consumes API data and independently implements simple summaries and comparisons, referencing upstream definitions. The adapter reference revision identifies the source reviewed, not a claim that the deployed simulator uses that exact revision; the job's reported engine version is stored separately.
 
-OpenAI implementation references: [function calling](https://developers.openai.com/api/docs/guides/function-calling) and [structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
+Gemini implementation references: [function calling](https://ai.google.dev/gemini-api/docs/function-calling), [structured outputs](https://ai.google.dev/gemini-api/docs/structured-output), and [official Python SDK](https://ai.google.dev/gemini-api/docs/libraries).
 
-## Verification and real AI smoke test
+## Gemini setup and real smoke test
 
-Automated tests deliberately use synthetic telemetry fixtures and mocked model replies:
+Automated tests use clearly labeled synthetic telemetry and mocked Gemini SDK responses; they are not a real model check. The previously verified simulator episode is cached under run ID `sim-e221c1bfeb360810fc89c9cf`.
+
+Install the backend dependencies after updating this integration:
 
 ```powershell
-.venv/Scripts/python -m unittest discover -s backend/tests -v
-cd frontend
-npm run build
+.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
 ```
 
-A real simulator import was verified on 2026-10-24 (UTC), job `20261015-103213-ls-act`, episode `1a003a065b58564c508b7d4dd47a69f7120eb0f9dca77888b9518b7ac9d22438`: Flask import HTTP 200, 368 speed samples, 24 signals, successful offline cache reload. Outcome metadata was empty; the job breakdown supplied `localization_lost`. The adapter correctly reported unknown handoff time and label-only evidence. No simulator jobs were submitted, changed or deleted.
+Create a Gemini API key in AI Studio using a project that remains on the free tier. To enter it into the current PowerShell process without echoing it, run these commands in terminal 1 from the repository root. The key stays out of chat, source code and Git; it is present only in the Flask process environment and inherited by the backend process.
 
-Verification also passed 35 backend tests and the production frontend build (Vite reports a bundle-size advisory). The checked-in real MCAP `20260519_150616_0.mcap` imported successfully: 84.750006743 seconds, 8,475 speed samples, with telemetry and deterministic diagnostic routes both returning HTTP 200.
+```powershell
+Set-Location 'C:\Users\chack\Documents\Data-Insights'
+$secureKey = Read-Host 'Gemini API key (hidden)' -AsSecureString
+$env:GEMINI_API_KEY = [System.Net.NetworkCredential]::new('', $secureKey).Password
+Remove-Variable secureKey
+$env:AI_PROVIDER = 'gemini'
+$env:GEMINI_MODEL = 'gemini-3.5-flash-lite'
+$env:GEMINI_REQUEST_TIMEOUT_SECONDS = '180'
+$env:AI_ANALYSIS_TIMEOUT_SECONDS = '300'
+.venv\Scripts\python.exe backend\app.py --port 5000
+```
 
-For a **real AI smoke test**, distinct from unit tests:
+In terminal 2, start the existing frontend:
 
-1. Supply `OPENAI_API_KEY` securely to the backend process and set `OPENAI_MODEL` to an accessible Responses/structured-output model. Restart Flask. Keep the key out of frontend configuration.
-2. Start the connected frontend. Import the completed episode above (or select its local cached run).
-3. Click **Deterministic diagnostics**. Verify its time basis, source, missing values and simulator-label classification. Confirm “AI analysis not configured” is absent.
-4. Click **Analyze Run** once. This makes billable OpenAI requests with diagnostic data from this run. Wait up to 60 seconds. Do not treat the deterministic display as the AI result.
-5. Verify the returned panel says `OpenAI Responses API`, identifies the configured model and a positive tool-call count, and displays a validated report or explicit insufficient-data result. Open each evidence item and compare its measurements/time window with deterministic diagnostics. `localization_lost` must be identified as an existing simulator label unless independently supported observations are separately stated.
-6. Change runs during analysis and confirm stale results do not appear on the new run. Live refresh alone must not initiate AI requests. Stop/restart Flask without network and confirm the simulator run still opens locally (AI itself requires network).
-7. Remove backend AI configuration and restart. **Analyze Run** should show **AI analysis not configured** while import and deterministic diagnostics remain usable.
+```powershell
+Set-Location 'C:\Users\chack\Documents\Data-Insights\frontend'
+$env:VITE_API_URL = 'http://127.0.0.1:5000/api'
+npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
+```
 
-The implementation session had no configured backend AI credentials/model, so no real OpenAI end-to-end result is claimed. Automated SDK/API mocks are only contract/failure-path checks. Live Jetson hardware was not available; existing health/telemetry behavior was checked with a synthetic live snapshot.
+Open the dashboard's cached simulator run `sim-e221c1bfeb360810fc89c9cf` (episode prefix `1a003a065b`) and click **Analyze Run** once. Check the report response/provider identifies Gemini and the configured model, and `toolCalls` is greater than zero. Compare every attached evidence ID to the deterministic diagnostics for that run: its numeric values, units, source and timestamps must match the Python-generated summary/event. This episode has unknown handoff time, so evidence must retain simulator-relative time. Its `localization_lost` is an existing simulator label, not independent root-cause evidence. This smoke test uses the hosted Gemini free-tier API; it is separate from mocked automated tests. If quota is exhausted, the dashboard reports a quota error and does not fall back.
 
+Backend verification:
+
+```powershell
+Set-Location 'C:\Users\chack\Documents\Data-Insights'
+.venv\Scripts\python.exe -m unittest discover -s backend\tests -v
+```
 
 
 TODO:
 1. Cost Function Mapping
 2. Change Arrow to match kart and be realistic
+
+
+Integration verified against Google model/pricing documentation on 2026-10-28. SDK Content and binary thought signatures are retained unchanged across turns; a separate base64 JSON representation is used only for context accounting. Parallel tool replies retain call IDs. The user subsequently confirmed successful real Gemini analyses. Offline regressions do not independently establish live API success or diagnostic quality; no additional live requests were made while preparing this commit.

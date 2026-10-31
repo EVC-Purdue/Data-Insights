@@ -287,7 +287,7 @@ def analyze_run(key):
     try:
         return jsonify(agent.analyze(run))
     except agent.AnalysisError as exc:
-        return jsonify(error=str(exc)), 502
+        return jsonify(error=str(exc), category=exc.category), 502
     finally:
         analysis_slot.release()
 
