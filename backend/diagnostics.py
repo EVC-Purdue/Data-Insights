@@ -6,6 +6,7 @@ from copy import deepcopy
 from statistics import median
 
 from simulator import SOURCE, number
+from command_mapping import SOURCE as COMMAND_SOURCE
 
 
 def run_format(run):
@@ -16,7 +17,7 @@ def run_format(run):
                    'throttle': ('raw PWM', 'command', '/e_comms/throttle_pwm'),
                    'steering': ('raw PWM', 'command', '/e_comms/steering_pwm'),
                    'acceleration': ('m/s^2', 'sensor_measurement', '/imu linear_acceleration.x'),
-                   'commanded': ('m/s', 'command', 'unavailable')}
+                   'commanded': ('m/s', 'command', 'unavailable' if live else COMMAND_SOURCE)}
     measurements = {name: {'unit': unit, 'kind': kind, 'source': source, 'samples': run['telemetry'].get(name, [])}
                     for name, (unit, kind, source) in definitions.items()}
     points = run['telemetry'].get('gps', [])
@@ -43,6 +44,19 @@ def evidence_id(value):
     return 'ev-' + hashlib.sha256(json.dumps(value, sort_keys=True, allow_nan=False).encode()).hexdigest()[:16]
 
 
+MAX_COMMAND_WINDOW_SECONDS = 30
+
+
+class WindowTooLarge(ValueError):
+    def __init__(self, duration, suggestion):
+        self.payload = {'error': {'code': 'window_too_large',
+            'requestedDurationSeconds': duration, 'maximumDurationSeconds': MAX_COMMAND_WINDOW_SECONDS,
+            'message': 'Retry with explicit start/end bounds no more than 30 seconds apart. This rejected attempt consumed one budget slot.',
+            'suggestedWindow': suggestion,
+            'suggestionStatus': 'available' if suggestion else 'no_usable_overlap'}}
+        super().__init__('Comparison window exceeds 30 seconds')
+
+
 class Diagnostics:
     def __init__(self, run):
         self.run_id = run['id']
@@ -62,11 +76,12 @@ class Diagnostics:
                  'samples': len(m['samples']), 'missing': sum(not number(p.get('value')) for p in m['samples'])}
                 for name, m in self.data['measurements'].items()]
 
-    def coverage(self, signal):
+    def coverage(self, signal, start=None, end=None):
         if signal not in self.data['measurements']:
             raise ValueError('Unknown signal')
         m = self.data['measurements'][signal]
-        samples = m['samples']
+        samples = [p for p in m['samples'] if (start is None or p['time'] >= start) and (end is None or p['time'] <= end)]
+        window = {'start': start, 'end': end} if start is not None and end is not None else None
         times = sorted({p['time'] for p in samples if number(p.get('time'))})
         valid_times = sorted({p['time'] for p in samples if number(p.get('time')) and number(p.get('value'))})
         deltas = [b - a for a, b in zip(times, times[1:])]
@@ -74,12 +89,13 @@ class Diagnostics:
         gaps = [{'start': a, 'end': b, 'duration': b - a} for a, b in zip(times, times[1:])
                 if cadence is not None and b - a > 3 * cadence + 1e-9]
         bounds = self.data['metadata']['time']
-        start, end = bounds.get('start'), bounds.get('end')
+        start, end = (start, end) if window else (bounds.get('start'), bounds.get('end'))
         def interval(a, b):
             return {'start': a, 'end': b, 'duration': b - a} if number(a) and number(b) and b > a else None
         first, last = (times[0], times[-1]) if times else (None, None)
         # Do not assign an empty series two overlapping leading/trailing gaps.
         return self.record({'type': 'signal_coverage', 'signal': signal, 'unit': m['unit'],
+            **({'requestedWindow': window} if window else {}),
             'kind': m['kind'], 'source': m['source'], 'timeBasis': bounds,
             'state': 'empty' if not samples else 'no_finite_values' if not valid_times else 'sampled',
             'samples': len(samples), 'nullValues': sum(p.get('value') is None for p in samples),
@@ -102,8 +118,102 @@ class Diagnostics:
         ordered = [n for n in preferred if n in names] + [n for n in names if n not in preferred]
         metadata = self.metadata()
         return {'metadata': {k: metadata[k] for k in ('source', 'time', 'limitations') if k in metadata},
+                'commandSemantics': self.command_semantics(),
                 'coverage': [self.coverage(n) for n in ordered[:12]], 'omittedSignals': ordered[12:],
                 'note': 'Coverage is timestamp availability, not a sensor-health verdict. Use signal_coverage for omitted signals and time_window_summary for measurements/commands.'}
+
+    def command_semantics(self):
+        mapped = self.data['measurements'].get('commanded', {}).get('source') == COMMAND_SOURCE
+        return self.record({'type': 'command_semantics', 'signal': 'commanded' if mapped else 'cmd_speed',
+            'source': COMMAND_SOURCE if mapped else 'Selected run signal metadata',
+            'meaning': ('Requested linear speed in m/s before actuator clamping; not applied throttle or guaranteed achieved speed.'
+                        if mapped else 'Use the selected run command units/provenance; physical /cmd_drive contract not verified for this source.'),
+            'verification': 'Publisher and consumer source inspection documented in docs/cmd-drive-mapping.md; deployed firmware/configuration is unverified.' if mapped else 'Physical command mapping not applicable.',
+            'rawBagVerification': {'status': 'unavailable', 'reason': 'No audit artifact bound to exact bag content and importer implementation is attached to this analysis. Run names are not verification.'}})
+
+    def _overlap_intervals(self, names, coverages, start, end):
+        def intervals(name, c):
+            # Availability spans only: no value interpolation or sample pairing.
+            points = sorted((p for p in self.data['measurements'][name]['samples'] if start <= p['time'] <= end), key=lambda p: p['time'])
+            spans = []
+            previous = None
+            threshold = c['gapThresholdSeconds']
+            for p in points:
+                if not number(p.get('value')):
+                    previous = None
+                    continue
+                t = p['time']
+                if previous is not None and threshold is not None and t - previous <= threshold + 1e-9:
+                    spans[-1][1] = t
+                else:
+                    spans.append([t, t])
+                previous = t
+            return spans
+
+        left, right = [intervals(n, c) for n, c in zip(names, coverages)]
+        intersections = []
+        i = j = 0
+        while i < len(left) and j < len(right):
+            a, b = max(left[i][0], right[j][0]), min(left[i][1], right[j][1])
+            if b >= a:
+                intersections.append({'start': a, 'end': b})
+            if left[i][1] < right[j][1]:
+                i += 1
+            else:
+                j += 1
+        return intersections
+
+    def suggest_command_window(self):
+        # Use an isolated diagnostics instance: rejected calls create no evidence.
+        helper = Diagnostics({'id': self.run_id, 'diagnostic': self.data})
+        measurements = self.data['measurements']
+        command = 'commanded' if 'commanded' in measurements else 'cmd_speed'
+        names = (command, 'speed')
+        if any(n not in measurements or measurements[n]['unit'] != 'm/s' for n in names):
+            return None
+        bounds = self.metadata()['time']
+        start, end = bounds.get('start'), bounds.get('end')
+        if not number(start) or not number(end) or end <= start:
+            return None
+        coverages = [helper.coverage(n) for n in names]
+        overlaps = helper._overlap_intervals(names, coverages, start, end)
+        # Earliest positive-duration overlap, first <=30 seconds. Require a
+        # successful window-level overlap check too (cadence may change).
+        for span in overlaps:
+            a, b = span['start'], min(span['end'], span['start'] + MAX_COMMAND_WINDOW_SECONDS)
+            if b <= a or b - a > MAX_COMMAND_WINDOW_SECONDS:
+                continue
+            local = [helper.coverage(n, a, b) for n in names]
+            if any(i['end'] > i['start'] for i in helper._overlap_intervals(names, local, a, b)):
+                return {'start': a, 'end': b}
+        return None
+
+    def command_speed_window(self, start, end):
+        bounds = self.metadata()['time']
+        if not number(start) or not number(end) or not math.isfinite(end - start) or end <= start:
+            raise ValueError('Comparison requires finite start < end, at most 30 seconds')
+        if end - start > MAX_COMMAND_WINDOW_SECONDS:
+            raise WindowTooLarge(end - start, self.suggest_command_window())
+        if start < bounds['start'] or end > bounds['end']:
+            raise ValueError('Comparison window must lie within the selected run')
+        measurements = self.data['measurements']
+        command = 'commanded' if 'commanded' in measurements else 'cmd_speed'
+        if command not in measurements or 'speed' not in measurements:
+            raise ValueError('Requested-speed or measured-speed mapping unavailable')
+        if any(measurements[n]['unit'] != 'm/s' for n in (command, 'speed')):
+            raise ValueError('Comparison requires documented m/s units on both signals')
+        summaries = [self.summary(n, start, end) for n in (command, 'speed')]
+        coverages = [self.coverage(n, start, end) for n in (command, 'speed')]
+
+        intersections = self._overlap_intervals((command, 'speed'), coverages, start, end)
+        overlap = self.record({'type': 'command_speed_availability', 'requestedWindow': {'start': start, 'end': end},
+            'signals': [command, 'speed'], 'source': [measurements[n]['source'] for n in (command, 'speed')],
+            'usableCoverageOverlaps': bool(intersections), 'overlapIntervals': intersections[:3],
+            'overlapIntervalCount': len(intersections), 'omittedIntervals': max(0, len(intersections) - 3),
+            'method': 'Intersect finite-sample availability spans; nulls break spans, as do spacings above each window cadence threshold. Unknown cadence supports isolated timestamps only. Overlap is availability, not paired samples.',
+            'limitations': 'No interpolation, tracking error, correlation, response delay, causality, or acceptable-error threshold is computed. Coverage gaps alone establish neither sensor, logging, nor importer failure.'})
+        return {'requestedWindow': {'start': start, 'end': end}, 'semantics': self.command_semantics(),
+                'summaries': summaries, 'coverage': coverages, 'availability': overlap}
 
     def summary(self, signal, start=None, end=None):
         if signal not in self.data['measurements']:
@@ -221,9 +331,12 @@ class Diagnostics:
             raise ValueError('Tool arguments must be an object')
         expected = {'run_metadata': set(), 'available_signals': set(), 'detected_events': set(),
                     'run_overview': set(), 'signal_coverage': {'signal'},
+                    'command_speed_window': {'start', 'end'},
                     'time_window_summary': {'signal', 'start', 'end'}}
         if name not in expected or set(args) != expected[name]:
             raise ValueError('Unknown tool or invalid argument keys; tools are restricted to the selected run')
+        if name == 'command_speed_window':
+            return self.command_speed_window(**args)
         if name in ('time_window_summary', 'signal_coverage'):
             if not isinstance(args['signal'], str):
                 raise ValueError('Signal must be a string')

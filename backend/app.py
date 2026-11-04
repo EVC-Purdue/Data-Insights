@@ -15,6 +15,7 @@ from flask import Flask, jsonify, send_from_directory, request
 from mcap_ros2.reader import read_ros2_messages
 import agent
 from diagnostics import Diagnostics
+from command_mapping import commanded_speed
 from simulator import EpisodeCache, SimulatorError, episode_rows, import_episode, job_detail, jobs, number
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,6 +85,9 @@ def import_bag(path):
         t = (stamp - start) / 1e9
         run['duration'] = max(run['duration'], t)
         topic = event.channel.topic
+        if topic == '/cmd_drive':
+            value, _ = commanded_speed(event.ros_msg) if event.schema.name == 'std_msgs/msg/Float32MultiArray' else (None, 'unsupported_schema')
+            run['telemetry']['commanded'].append({'time': t, 'value': value})
         if topic == '/mpc/status':
             status_times.append(t)
             data = event.ros_msg.data

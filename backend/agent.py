@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+from uuid import uuid4
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -12,7 +13,7 @@ from google import genai
 from google.genai import errors, types
 import httpx
 
-from diagnostics import Diagnostics
+from diagnostics import Diagnostics, WindowTooLarge
 
 MAX_CALLS = 6
 MAX_CONTEXT = 48000
@@ -108,6 +109,8 @@ def tools():
                    ('run_overview', 'Start here: compact run time basis and Python signal coverage evidence, including command availability. Prioritizes 12 signals; lists omitted signals.', {}),
                    ('signal_coverage', 'Read Python coverage evidence for one signal, distinguishing timestamp gaps, null values and empty signals.', {'signal': {'type': 'string'}}),
                    ('available_signals', 'List signal names, units, classifications and missing counts.', {}),
+                   ('command_speed_window', 'Compare requested and measured speed summaries and coverage over the SAME explicit window, at most 30 seconds within run bounds. No tracking error or correlation is computed.',
+                    {'start': {'type': 'number', 'description': 'Explicit start in run seconds. end - start must be <=30 seconds.'}, 'end': {'type': 'number', 'description': 'Explicit end in run seconds, greater than start and at most 30 seconds after start.'}}),
                    ('detected_events', 'Read Python-detected events and separated simulator outcome labels.', {}),
                    ('time_window_summary', 'Calculate a Python numeric summary for one signal and optional time bounds.',
                     {'signal': {'type': 'string'}, 'start': {'type': ['number', 'null']},
@@ -125,9 +128,17 @@ RELATIONSHIP_GUIDANCE = ('Claims that signals correspond, correlate, or explain 
     'explicit focused time window on every involved signal. Whole-run summaries and extrema support only separate observations, '
     'not temporal correspondence. Even aligned aggregate windows do not compute correlation or establish causality; do not claim '
     'either without a supporting calculation/test. Otherwise explicitly state the relationship is unassessed. '
+    'Same-window aggregate summaries support separate observations, not simultaneous values. Without paired timestamp evidence, '
+    'say "the window contains..." instead of "while commands were active". Limit coverage claims to signals and intervals '
+    'supported by delivered evidence. Explicitly retain leading command unavailability when a comparison window starts '
+    'before command samples, including its interval and coverage evidence ID. '
     'An empty imported signal means no samples were exposed by this importer, not that the source bag lacks its topic; '
     'source-topic absence requires an actual inventory check, which these tools do not provide.')
 INSTRUCTIONS += ' ' + RELATIONSHIP_GUIDANCE
+INSTRUCTIONS += ''' When requested speed and measured speed are available, prioritize one command_speed_window in their overlapping finite coverage. Explain why that focused window was selected, using Python-provided event/extremum times when available; an extremum is a selection anchor, not proof of a fault. Use time_window_summary to locate an extremum if needed. If overlap or suitable coverage is absent, explain why comparison is unavailable. The comparison returns both same-window summaries in one budget slot; cite their individual evidence IDs. Requested speed is before actuator clamping, not applied throttle or achieved speed; deployed firmware/configuration remains uncertain. Respect rawBagVerification: historical audit findings cannot be applied by run name. Missing coverage cannot establish sensor, logging, or importer failure. Availability overlap and aggregate summaries do not measure tracking error, correlation, response delay, or causality.'''
+
+
+INSTRUCTIONS += ' Prioritize command_speed_window before redundant whole-run summaries. Its maximum duration is 30 seconds. On window_too_large use the suggested explicit window if available and budget remains; do not repeat an oversized request. A failed comparison request is not evidence that usable data is unavailable. All rejected attempts still consume the six-attempt budget.'
 
 
 def aligned_windows(items, bounds):
@@ -149,7 +160,21 @@ def aligned_windows(items, bounds):
 
 def validate_report(text, diagnostic, evidence_delivered=None):
     report = Report.model_validate_json(text)
-    used = set()
+    def narrative_ids(value):
+        if isinstance(value, str):
+            return set(re.findall(r'\bev-[A-Za-z0-9_-]+', value))
+        if isinstance(value, dict):
+            return set().union(*(narrative_ids(v) for v in value.values()))
+        if isinstance(value, list):
+            return set().union(*(narrative_ids(v) for v in value))
+        return set()
+
+    used = narrative_ids(report.model_dump())
+    for key in used:
+        if key not in diagnostic.evidence:
+            raise AnalysisError('AI report referenced unavailable evidence')
+        if evidence_delivered is not None and key not in evidence_delivered:
+            raise AnalysisError('AI report referenced evidence not returned by a tool')
     for finding in report.observed_issues:
         for key in finding.evidence_ids:
             if key not in diagnostic.evidence:
@@ -198,6 +223,7 @@ def _context_json(history):
 
 
 async def investigate(run, client, model):
+    analysis_id = uuid4().hex
     diagnostic = Diagnostics(run)
     history = [{'role': 'user', 'parts': [{'text': 'Investigate this selected run. Start with run_overview. Prioritize relevant measurements, command evidence, and focused windows within the six-call budget.'}]}]
     calls = 0
@@ -250,6 +276,9 @@ async def investigate(run, client, model):
                     else:
                         delivered = delivered_ids(result, diagnostic)
                         evidence_delivered.update(delivered)
+                except WindowTooLarge as exc:
+                    outcome = 'window_too_large'
+                    output = json.dumps(exc.payload, allow_nan=False)
                 except (ValueError, TypeError, RecursionError):
                     outcome = 'invalid_tool_or_arguments'
                     output = json.dumps({'error': 'Invalid tool or arguments. Use the listed schema and selected run only.'})
@@ -267,7 +296,7 @@ async def investigate(run, client, model):
                             safe_args[k] = v if v is None or (type(v) in (int, float) and abs(v) < 1e12) else '[withheld]'
                     if 'signal' in args:
                         safe_args['signal'] = args['signal'] if args['signal'] in ('speed', 'acceleration', 'steering', 'throttle', 'commanded', 'cmd_speed', 'ay_mps2', 'wheel', 'wheel_l', 'wheel_r', 'yaw', 'position_x', 'position_y') else '[withheld]'
-                trace.append({'request': requested, 'tool': name if name in known else '[unknown]',
+                trace.append({'analysisId': analysis_id, 'request': requested, 'tool': name if name in known else '[unknown]',
                     'arguments': safe_args, 'executedSuccessfully': outcome in ('success', 'output_limit'),
                     'outcome': outcome, 'deliveredEvidenceIds': sorted(delivered)[:32],
                     'omittedEvidenceIds': max(0, len(delivered) - 32)})
@@ -280,9 +309,9 @@ async def investigate(run, client, model):
         history.append(types.Content(role='user', parts=replies))
 
     if os.environ.get('GEMINI_DIAGNOSTIC_TRACE') == '1':
-        logger.warning('Gemini tool trace: %s', json.dumps({'requested': requested, 'attempted': calls,
+        logger.warning('Gemini tool trace: %s', json.dumps({'analysisId': analysis_id, 'requested': requested, 'attempted': calls,
             'executedSuccessfully': successful, 'entries': trace, 'omittedEntries': max(0, requested - len(trace))}))
-    return await finalize_report(run, client, model, diagnostic, history, evidence_delivered, calls)
+    return await finalize_report(run, client, model, diagnostic, history, evidence_delivered, calls, analysis_id)
 
 
 def delivered_ids(value, diagnostic):
@@ -295,7 +324,7 @@ def delivered_ids(value, diagnostic):
     return set()
 
 
-async def finalize_report(run, client, model, diagnostic, history, evidence_delivered, calls):
+async def finalize_report(run, client, model, diagnostic, history, evidence_delivered, calls, analysis_id=None):
     # Finalize directly after the last slot, without another investigation turn.
     coverage = diagnostic.significant_coverage()
     context = json.dumps(coverage, allow_nan=False)
@@ -303,7 +332,7 @@ async def finalize_report(run, client, model, diagnostic, history, evidence_deli
         raise AnalysisError('Coverage finalization context exceeds its size limit.', 'context_limit')
     evidence_delivered = evidence_delivered | delivered_ids(coverage, diagnostic)
     if os.environ.get('GEMINI_DIAGNOSTIC_TRACE') == '1':
-        logger.warning('Gemini finalization evidence: %s', json.dumps({'coverageEvidenceIds': sorted(delivered_ids(coverage, diagnostic)),
+        logger.warning('Gemini finalization evidence: %s', json.dumps({'analysisId': analysis_id, 'coverageEvidenceIds': sorted(delivered_ids(coverage, diagnostic)),
             'coverageContextCharacters': len(context), 'omittedLimitations': coverage['omittedCount']}))
     relationships = aligned_windows([diagnostic.evidence[k] for k in evidence_delivered], diagnostic.metadata()['time'])
     allowed = ', '.join(sorted(evidence_delivered)) or '(none)'
@@ -329,7 +358,7 @@ async def finalize_report(run, client, model, diagnostic, history, evidence_deli
         report = validate_report(content, diagnostic, evidence_delivered)
     except (ValidationError, AnalysisError):
         raise AnalysisError('Gemini returned a report that failed schema or evidence validation; no report was accepted.', 'invalid_report') from None
-    return {'runId': run['id'], 'model': model, 'toolCalls': calls, 'report': report,
+    return {'analysisId': analysis_id, 'runId': run['id'], 'model': model, 'toolCalls': calls, 'report': report,
             'snapshot': diagnostic.metadata()['time'], 'provider': 'Gemini API'}
 
 
